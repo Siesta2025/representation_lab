@@ -7,3 +7,5 @@ checkpoints/
 .vscode/
 AGENTS.md
 Log.md
+wandb/
+.pytest_cache/

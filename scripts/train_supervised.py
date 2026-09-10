@@ -4,6 +4,7 @@ import random
 import argparse
 import csv
 import json
+import wandb
 from pathlib import Path
 from torch import nn
 from torch.utils.data import Subset
@@ -87,6 +88,17 @@ def parse_args():
         type=float,
         default=0.1,
     )
+    parser.add_argument(
+        "--wandb_mode",
+        type=str,
+        choices=["online", "offline", "disabled"],
+        default="disabled",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="representation_lab",
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -102,8 +114,13 @@ if __name__ == "__main__":
     augmentation = args.augmentation
     milestones = args.milestones
     gamma = args.gamma
+    wandb_mode = args.wandb_mode
+    wandb_project = args.wandb_project
 
     path = Path("./outputs") / run_name
+
+    wandb_dir = Path("./outputs").resolve()
+    wandb_dir.mkdir(parents=True, exist_ok=True)
 
     if resume is None:
         assert not path.exists(), f"Run name '{run_name}' already exists. Please choose a different run name."
@@ -201,20 +218,30 @@ if __name__ == "__main__":
         f"run_started run_name={run_name} device={device} resume={resume}"
     )
 
+    config = vars(args).copy()
+    config["device"] = str(device)
+    config["dataset"] = "CIFAR10"
+    config["criterion"] = "CrossEntropyLoss"
+    config["optimizer"] = "SGD"
+    config["scheduler"] = "MultiStepLR"
+    if augmentation == "basic":
+        config["train_transform"] = "RandomCrop(32, padding=4)+RandomHorizontalFlip(0.5)+ToTensor"
+    else:
+        config["train_transform"] = "ToTensor"
+
+    run = wandb.init(
+        name=run_name,
+        config=config,
+        mode=wandb_mode,
+        project=wandb_project,
+        dir=str(wandb_dir),
+    )
+    logger.info(f"wandb_run_initialized run_name={run_name} wandb_mode={wandb_mode} wandb_project={wandb_project}")
+
     if resume is None:
         start_epoch = 0
         best_val_accuracy = 0.0
 
-        config = vars(args).copy()
-        config["device"] = str(device)
-        config["dataset"] = "CIFAR10"
-        config["criterion"] = "CrossEntropyLoss"
-        config["optimizer"] = "SGD"
-        config["scheduler"] = "MultiStepLR"
-        if augmentation == "basic":
-            config["train_transform"] = "RandomCrop(32, padding=4)+RandomHorizontalFlip(0.5)+ToTensor"
-        else:
-            config["train_transform"] = "ToTensor"
         with open(path / "config.json", "w") as f:
             json.dump(config, f, indent=4)
         logger.info(f"config_saved path={path / 'config.json'}")
@@ -307,16 +334,17 @@ if __name__ == "__main__":
         )
 
         metrics = {
-                "epoch": epoch + 1,
-                "lr": current_lr,
-                "train_loss": train_loss,
-                "train_accuracy": train_accuracy,
-                "val_loss": val_loss,
-                "val_accuracy": val_accuracy,
+            "epoch": epoch + 1,
+            "lr": current_lr,
+            "train_loss": train_loss,
+            "train_accuracy": train_accuracy,
+            "val_loss": val_loss,
+            "val_accuracy": val_accuracy,
         }
         with open(metric_path, mode='a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=metric_fields)
             writer.writerow(metrics)
+        run.log(metrics)
 
     load_training_checkpoint(
         path=best_checkpoint_path,
@@ -331,4 +359,12 @@ if __name__ == "__main__":
     logger.info(
         f"run_complete test_loss={test_loss:.4f} "
         f"test_accuracy={test_accuracy:.4f}"
+    )
+
+    run.summary["best_val_accuracy"] = best_val_accuracy
+    run.summary["test_loss"] = test_loss
+    run.summary["test_accuracy"] = test_accuracy
+    run.finish()
+    logger.info(
+        f"wandb_run_finished run_name={run_name} wandb_mode={wandb_mode} wandb_project={wandb_project}"
     )
