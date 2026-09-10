@@ -198,6 +198,13 @@ if __name__ == "__main__":
     best_checkpoint_path = path / "best.pt"
     metric_path = path / "metrics.csv"
 
+    metric_fields = [
+        "epoch",
+        "lr",
+        "train_loss",
+        "val_loss",
+    ]
+
     if args.resume is None:
         path.mkdir(parents=True)
 
@@ -231,20 +238,6 @@ if __name__ == "__main__":
                 f,
                 indent=4,
             )
-
-        with open(
-            metric_path,
-            "w",
-            newline="",
-        ) as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "epoch",
-                "lr",
-                "train_loss",
-                "val_loss",
-            ])
-
         logger.info(f"config_saved path={path / 'config.json'}")
 
     else:
@@ -272,6 +265,16 @@ if __name__ == "__main__":
             f"start_epoch={start_epoch} "
             f"best_val_loss={best_val_loss:.4f}"
         )
+
+    if not metric_path.exists():
+        with open(
+            metric_path,
+            "w",
+            newline="",
+        ) as f:
+            writer = csv.DictWriter(f, fieldnames=metric_fields)
+            writer.writeheader()
+        logger.info(f"metrics_header_written path={metric_path}")
 
     # -------------------------
     # Training
@@ -341,18 +344,19 @@ if __name__ == "__main__":
             f"path={last_checkpoint_path}"
         )
 
+        metrics = {
+                "epoch": epoch + 1,
+                "lr": current_lr,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+        }
         with open(
             metric_path,
             "a",
             newline="",
         ) as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                epoch + 1,
-                current_lr,
-                train_loss,
-                val_loss,
-            ])
+            writer = csv.DictWriter(f, fieldnames=metric_fields)
+            writer.writerow(metrics)
 
     logger.info(
         f"run_complete best_val_loss={best_val_loss:.4f}"

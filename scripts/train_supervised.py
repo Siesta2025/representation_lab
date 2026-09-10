@@ -248,10 +248,18 @@ if __name__ == "__main__":
         )
 
     metric_path = path / "metrics.csv"
+    metric_fields = [
+        "epoch",
+        "lr",
+        "train_loss",
+        "train_accuracy",
+        "val_loss",
+        "val_accuracy",
+    ]
     if not metric_path.exists():
         with open(metric_path, mode="a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["epoch", "lr", "train_loss", "train_accuracy", "val_loss", "val_accuracy"])
+            writer = csv.DictWriter(f, fieldnames=metric_fields)
+            writer.writeheader()
 
     for epoch in range(start_epoch, num_epochs):
         train_loss, train_accuracy = train_supervised_one_epoch(model, train_loader, criterion, optimizer, device)
@@ -298,9 +306,17 @@ if __name__ == "__main__":
             f"path={last_checkpoint_path}"
         )
 
+        metrics = {
+                "epoch": epoch + 1,
+                "lr": current_lr,
+                "train_loss": train_loss,
+                "train_accuracy": train_accuracy,
+                "val_loss": val_loss,
+                "val_accuracy": val_accuracy,
+        }
         with open(metric_path, mode='a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([epoch+1, current_lr, train_loss, train_accuracy, val_loss, val_accuracy])
+            writer = csv.DictWriter(f, fieldnames=metric_fields)
+            writer.writerow(metrics)
 
     load_training_checkpoint(
         path=best_checkpoint_path,
