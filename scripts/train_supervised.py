@@ -99,6 +99,11 @@ def parse_args():
         type=str,
         default="representation_lab",
     )
+    parser.add_argument(
+        "--wandb_id",
+        type=str,
+        default=None,
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -116,11 +121,19 @@ if __name__ == "__main__":
     gamma = args.gamma
     wandb_mode = args.wandb_mode
     wandb_project = args.wandb_project
-
+    wandb_id = args.wandb_id
     path = Path("./outputs") / run_name
 
     wandb_dir = Path("./outputs").resolve()
     wandb_dir.mkdir(parents=True, exist_ok=True)
+
+    wandb_resume = (
+        "must"
+        if resume == "last"
+        and wandb_mode == "online"
+        and wandb_id is not None
+        else None
+    )
 
     if resume is None:
         assert not path.exists(), f"Run name '{run_name}' already exists. Please choose a different run name."
@@ -230,13 +243,21 @@ if __name__ == "__main__":
         config["train_transform"] = "ToTensor"
 
     run = wandb.init(
+        id=wandb_id,
         name=run_name,
         config=config,
         mode=wandb_mode,
         project=wandb_project,
         dir=str(wandb_dir),
+        resume=wandb_resume,
+        allow_val_change=resume is not None,
     )
-    logger.info(f"wandb_run_initialized run_name={run_name} wandb_mode={wandb_mode} wandb_project={wandb_project}")
+    logger.info(
+        f"wandb_run_initialized run_id={run.id} "
+        f"resumed={run.resumed} "
+        f"run_name={run_name} "
+        f"wandb_mode={wandb_mode} wandb_project={wandb_project}"
+    )
 
     if resume is None:
         start_epoch = 0
@@ -292,7 +313,7 @@ if __name__ == "__main__":
         train_loss, train_accuracy = train_supervised_one_epoch(model, train_loader, criterion, optimizer, device)
 
         val_loss, val_accuracy = evaluate_classifier(model, val_loader, criterion, device)
-        
+
         current_lr = optimizer.param_groups[0]['lr']
         logger.info(
             f"epoch_complete epoch={epoch + 1} "
@@ -366,5 +387,8 @@ if __name__ == "__main__":
     run.summary["test_accuracy"] = test_accuracy
     run.finish()
     logger.info(
-        f"wandb_run_finished run_name={run_name} wandb_mode={wandb_mode} wandb_project={wandb_project}"
+        f"wandb_run_finished run_id={run.id} "
+        f"run_name={run_name} "
+        f"wandb_mode={wandb_mode} "
+        f"wandb_project={wandb_project}"
     )

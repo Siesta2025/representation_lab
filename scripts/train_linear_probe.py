@@ -5,6 +5,7 @@ import torch.nn as nn
 import argparse
 import csv
 import json
+import wandb
 from pathlib import Path
 from torchvision import transforms
 from torch.utils.data import Subset
@@ -101,6 +102,22 @@ def parse_args():
         choices=["random", "simclr", "supervised"],
         default="simclr",
     )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="representation_lab",
+    )
+    parser.add_argument(
+        "--wandb_id",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        "--wandb_mode",
+        type=str,
+        choices=["online", "offline", "disabled"],
+        default="disabled",
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -117,8 +134,21 @@ if __name__ == "__main__":
     gamma = args.gamma
     num_classes = args.num_classes
     encoder_name = args.encoder_name
+    wandb_project = args.wandb_project
+    wandb_id = args.wandb_id
+    wandb_mode = args.wandb_mode
 
     path = Path("./outputs") / run_name
+
+    wandb_dir = Path("./outputs").resolve()
+    wandb_dir.mkdir(parents=True, exist_ok=True)
+    wandb_resume = (
+        "must"
+        if resume == "last"
+        and wandb_id is not None
+        and wandb_mode == "online"
+        else None
+    )
 
     if resume is None:
         assert not path.exists(), f"Run name '{run_name}' already exists. Please choose a different run name."
@@ -211,16 +241,16 @@ if __name__ == "__main__":
         f"resume={resume} encoder={encoder_name}"
     )
 
+    config = vars(args).copy()
+    config["device"] = str(device)
+    config["dataset"] = "CIFAR10"
+    config["criterion"] = "CrossEntropyLoss"
+    config["optimizer"] = "SGD"
+    config["scheduler"] = "MultiStepLR"
+
     if resume is None:
         start_epoch = 0
         best_val_accuracy = 0.0
-
-        config = vars(args).copy()
-        config["device"] = str(device)
-        config["dataset"] = "CIFAR10"
-        config["criterion"] = "CrossEntropyLoss"
-        config["optimizer"] = "SGD"
-        config["scheduler"] = "MultiStepLR"
 
         with open(path / "config.json", "w") as f:
             json.dump(config, f, indent=4)
@@ -254,6 +284,24 @@ if __name__ == "__main__":
             f"start_epoch={start_epoch} "
             f"best_val_accuracy={best_val_accuracy:.4f}"
         )
+
+    run = wandb.init(
+        project=wandb_project,
+        name=run_name,
+        id=wandb_id,
+        resume=wandb_resume,
+        config=config,
+        dir=str(wandb_dir),
+        mode=wandb_mode,
+        allow_val_change=resume is not None,
+    )
+    logger.info(
+        f"wandb_run_initialized run_id={run.id} "
+        f"resumed={run.resumed} "
+        f"run_name={run_name} "
+        f"wandb_mode={wandb_mode} "
+        f"wandb_project={wandb_project}"
+    )
 
     metric_path = path / "metrics.csv"
     metric_fields = [
@@ -324,6 +372,7 @@ if __name__ == "__main__":
         with open(metric_path, mode='a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=metric_fields)
             writer.writerow(metrics)
+        run.log(metrics)
 
     load_training_checkpoint(
         path=best_checkpoint_path,
@@ -338,4 +387,14 @@ if __name__ == "__main__":
     logger.info(
         f"run_complete test_loss={test_loss:.4f} "
         f"test_accuracy={test_accuracy:.4f}"
+    )
+    run.summary["test_loss"] = test_loss
+    run.summary["test_accuracy"] = test_accuracy
+    run.summary["best_val_accuracy"] = best_val_accuracy
+    run.finish()
+    logger.info(
+        f"wandb_run_finished run_id={run.id} "
+        f"run_name={run_name} "
+        f"wandb_mode={wandb_mode} "
+        f"wandb_project={wandb_project}"
     )

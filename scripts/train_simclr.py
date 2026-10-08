@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import random
+import wandb
 from pathlib import Path
 
 import numpy as np
@@ -88,25 +89,66 @@ def parse_args():
         type=float,
         default=0.7,
     )
+    parser.add_argument(
+        "--wandb_mode",
+        type=str,
+        choices=["online", "offline", "disabled"],
+        default="disabled",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="representation_lab",
+    )
+    parser.add_argument(
+        "--wandb_id",
+        type=str,
+        default=None,
+    )
 
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    resume = args.resume
+    run_name = args.run_name
+    seed = args.seed
+    batch_size = args.batch_size
+    num_workers = args.num_workers
+    tau = args.tau
+    lr = args.lr
+    milestones = args.milestones
+    gamma = args.gamma
+    momentum = args.momentum
+    num_epochs = args.num_epochs
+    wandb_mode = args.wandb_mode
+    wandb_project = args.wandb_project
+    wandb_id = args.wandb_id
 
-    path = Path("./outputs") / args.run_name
+    wandb_dir = Path("./outputs").resolve()
+    wandb_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.resume is None:
+    wandb_resume = (
+        "must"
+        if resume == "last"
+        and wandb_id is not None
+        and wandb_mode == "online"
+        else None
+    )
+
+    path = Path("./outputs") / run_name
+
+    if resume is None:
         assert not path.exists(), (
-            f"Run '{args.run_name}' already exists."
+            f"Run '{run_name}' already exists."
         )
     else:
         assert path.exists(), (
-            f"Run '{args.run_name}' does not exist."
+            f"Run '{run_name}' does not exist."
         )
 
-    set_seed(args.seed)
+    set_seed(seed)
 
     device = torch.device(
         "cuda"
@@ -119,7 +161,7 @@ if __name__ == "__main__":
     # -------------------------
 
     generator = torch.Generator().manual_seed(
-        args.seed
+        seed
     )
 
     full_dataset = get_train_val_dataset(
@@ -146,16 +188,16 @@ if __name__ == "__main__":
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=args.num_workers,
+        num_workers=num_workers,
     )
 
     val_loader = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
+        num_workers=num_workers,
     )
 
     # -------------------------
@@ -175,19 +217,19 @@ if __name__ == "__main__":
     ).to(device)
 
     criterion = NTXent(
-        tau=args.tau
+        tau=tau
     )
 
     optimizer = torch.optim.SGD(
         model.parameters(),
-        lr=args.lr,
-        momentum=args.momentum,
+        lr=lr,
+        momentum=momentum,
     )
 
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
         optimizer,
-        milestones=args.milestones,
-        gamma=args.gamma,
+        milestones=milestones,
+        gamma=gamma,
     )
 
     # -------------------------
@@ -205,29 +247,29 @@ if __name__ == "__main__":
         "val_loss",
     ]
 
-    if args.resume is None:
+    if resume is None:
         path.mkdir(parents=True)
 
     logger = setup_logger(name=__name__, log_path=path / "train.log")
     logger.info(
-        f"run_started run_name={args.run_name} device={device} "
-        f"resume={args.resume}"
+        f"run_started run_name={run_name} device={device} "
+        f"resume={resume}"
     )
 
-    if args.resume is None:
+    config = vars(args).copy()
+    config["device"] = str(device)
+    config["dataset"] = "CIFAR10"
+    config["model"] = "SmallResNet+ProjectionHead"
+    config["projection_dim"] = 128
+    config["criterion"] = "NTXent"
+    config["optimizer"] = "SGD"
+    config["scheduler"] = "MultiStepLR"
+    config["train_size"] = 45000
+    config["val_size"] = 5000
+
+    if resume is None:
         start_epoch = 0
         best_val_loss = float("inf")
-
-        config = vars(args).copy()
-        config["device"] = str(device)
-        config["dataset"] = "CIFAR10"
-        config["model"] = "SmallResNet+ProjectionHead"
-        config["projection_dim"] = 128
-        config["criterion"] = "NTXent"
-        config["optimizer"] = "SGD"
-        config["scheduler"] = "MultiStepLR"
-        config["train_size"] = 45000
-        config["val_size"] = 5000
 
         with open(
             path / "config.json",
@@ -243,7 +285,7 @@ if __name__ == "__main__":
     else:
         checkpoint_path = (
             last_checkpoint_path
-            if args.resume == "last"
+            if resume == "last"
             else best_checkpoint_path
         )
 
@@ -276,13 +318,31 @@ if __name__ == "__main__":
             writer.writeheader()
         logger.info(f"metrics_header_written path={metric_path}")
 
+    run = wandb.init(
+        id=wandb_id,
+        project=wandb_project,
+        name=run_name,
+        config=config,
+        mode=wandb_mode,
+        dir=str(wandb_dir),
+        resume=wandb_resume,
+        allow_val_change=resume is not None,
+    )
+    logger.info(
+        f"wandb_run_initialized run_id={run.id} "
+        f"resumed={run.resumed} "
+        f"run_name={run_name} "
+        f"wandb_mode={wandb_mode} "
+        f"wandb_project={wandb_project}"
+    )
+
     # -------------------------
     # Training
     # -------------------------
 
     for epoch in range(
         start_epoch,
-        args.num_epochs,
+        num_epochs,
     ):
         train_loss = train_simclr_one_epoch(
             model,
@@ -345,10 +405,10 @@ if __name__ == "__main__":
         )
 
         metrics = {
-                "epoch": epoch + 1,
-                "lr": current_lr,
-                "train_loss": train_loss,
-                "val_loss": val_loss,
+            "epoch": epoch + 1,
+            "lr": current_lr,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
         }
         with open(
             metric_path,
@@ -357,7 +417,16 @@ if __name__ == "__main__":
         ) as f:
             writer = csv.DictWriter(f, fieldnames=metric_fields)
             writer.writerow(metrics)
+        run.log(metrics)
 
     logger.info(
         f"run_complete best_val_loss={best_val_loss:.4f}"
+    )
+    run.summary["best_val_loss"] = best_val_loss
+    run.finish()
+    logger.info(
+        f"wandb_run_finished run_id={run.id} "
+        f"run_name={run_name} "
+        f"wandb_mode={wandb_mode} "
+        f"wandb_project={wandb_project}"
     )
